@@ -24,7 +24,7 @@ jobs:
           usesh: true
           mem: 8192
           cpu: 4
-          release: "15.0"
+          release: "14.2"
           prepare: |
             # Update system
             freebsd-update fetch install || true
