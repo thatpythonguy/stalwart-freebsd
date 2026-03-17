@@ -1,0 +1,125 @@
+name: Build Stalwart Mail Server for FreeBSD
+
+on:
+  # Manual trigger only
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Stalwart version to build'
+        required: true
+        default: 'v0.15.5'
+
+jobs:
+  build-freebsd:
+    runs-on: ubuntu-latest
+    name: Build on FreeBSD 15.0
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Build Stalwart in FreeBSD VM
+        uses: vmactions/freebsd-vm@v1
+        with:
+          usesh: true
+          mem: 8192
+          cpu: 4
+          release: "15.0"
+          prepare: |
+            # Update system
+            freebsd-update fetch install || true
+            pkg update
+
+            # Install build dependencies
+            pkg install -y \
+              rust \
+              cargo \
+              git-lite \
+              gmake \
+              cmake \
+              llvm \
+              protobuf \
+              openssl \
+              sqlite3 \
+              pkgconf \
+              ca_root_nss
+
+            # Verify Rust installation
+            rustc --version
+            cargo --version
+
+          run: |
+            set -e
+
+            # Clone Stalwart source
+            echo "=== Cloning Stalwart ${{ github.event.inputs.version }} ==="
+            git clone --depth 1 --branch ${{ github.event.inputs.version }} \
+              https://github.com/stalwartlabs/mail-server.git stalwart
+
+            cd stalwart
+
+            # Show what we're building
+            echo "=== Build configuration ==="
+            cat Cargo.toml | grep -A5 "^\[package\]"
+
+            # Build with minimal features (faster, less memory)
+            echo "=== Starting build (this takes 20-30 minutes) ==="
+            cargo build --release \
+              -p stalwart \
+              --no-default-features \
+              --features "sqlite"
+
+            # Verify binary was created
+            echo "=== Build complete ==="
+            ls -la target/release/stalwart
+            file target/release/stalwart
+
+            # Copy to artifact location
+            mkdir -p /tmp/artifacts
+            cp target/release/stalwart /tmp/artifacts/stalwart-freebsd15-amd64
+            cp target/release/stalwart /tmp/artifacts/stalwart
+
+            # Create tarball
+            cd /tmp/artifacts
+            tar czf stalwart-freebsd15-amd64.tar.gz stalwart
+
+            echo "=== Artifacts ready ==="
+            ls -la /tmp/artifacts/
+
+      - name: Upload Stalwart binary
+        uses: actions/upload-artifact@v4
+        with:
+          name: stalwart-freebsd15-amd64
+          path: /tmp/artifacts/*
+          retention-days: 30
+          if-no-files-found: error
+
+      - name: Create Release
+        if: github.event.inputs.version != ''
+        uses: softprops/action-gh-release@v1
+        with:
+          tag_name: ${{ github.event.inputs.version }}-freebsd15
+          name: Stalwart ${{ github.event.inputs.version }} for FreeBSD 15.0
+          body: |
+            Pre-built Stalwart Mail Server binary for FreeBSD 15.0 AMD64
+
+            Built from: https://github.com/stalwartlabs/mail-server/releases/tag/${{ github.event.inputs.version }}
+
+            Features: SQLite backend only (minimal build)
+
+            ## Installation
+            ```sh
+            # Download and install
+            fetch https://github.com/${{ github.repository }}/releases/download/${{ github.event.inputs.version }}-freebsd15/stalwart-freebsd15-amd64.tar.gz
+            tar xzf stalwart-freebsd15-amd64.tar.gz
+            sudo install -m 755 stalwart /usr/local/bin/
+            sudo mkdir -p /usr/local/etc/stalwart /var/db/stalwart
+            ```
+
+            ## Configuration
+            See: https://stalw.art/docs/
+          files: /tmp/artifacts/*
+          draft: false
+          prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
